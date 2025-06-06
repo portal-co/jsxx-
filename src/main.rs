@@ -7,7 +7,7 @@ use std::{
 use anyhow::{anyhow, Result};
 use clap::Parser;
 use swc_common::BytePos;
-use swc_ecma_parser::{lexer::Lexer, EsConfig, Parser as ESParser, StringInput, Syntax};
+use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser as ESParser, StringInput, Syntax};
 
 mod command_utils;
 mod globals;
@@ -36,10 +36,10 @@ struct Args {
 }
 
 fn js_to_cpp<T: AsRef<str>>(mut transpiler: transpiler::Transpiler, input: T) -> Result<String> {
-    let syntax = Syntax::Es(EsConfig::default());
+    let syntax = Syntax::Es(EsSyntax::default());
     let lexer = Lexer::new(
         syntax,
-        swc_ecma_visit::swc_ecma_ast::EsVersion::Es2022,
+        swc_ecma_visit::swc_ecma_ast::EsVersion::latest(),
         StringInput::new(
             input.as_ref(),
             swc_common::BytePos(0),

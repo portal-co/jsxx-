@@ -188,7 +188,7 @@ impl Transpiler {
 
     fn transpile_for_of_stmt(&mut self, for_of_stmt: &ForOfStmt) -> Result<String> {
         let left = match &for_of_stmt.left {
-            VarDeclOrPat::VarDecl(var_decl) => self.transpile_var_decl(&var_decl)?,
+            ForHead::VarDecl(var_decl) => self.transpile_var_decl(&var_decl)?,
             _ => return Err(anyhow!("Only simple variables are supported in for-of")),
         };
 
@@ -398,17 +398,25 @@ impl Transpiler {
 
     fn transpile_assign_expr(&mut self, assign_expr: &AssignExpr) -> Result<String> {
         let left = match &assign_expr.left {
-            PatOrExpr::Expr(expr) => self.transpile_expr(expr)?,
-            PatOrExpr::Pat(pat) => match pat.as_ref() {
-                Pat::Expr(expr) => self.transpile_expr(expr)?,
-                Pat::Ident(ident) => format!("{}", ident.sym),
-                _ => {
+            AssignTarget::Simple(simp) => match simp {
+                SimpleAssignTarget::Ident(ident) => format!("{}", ident.sym),
+                   _ => {
                     return Err(anyhow!(
                         "Unsupported assignment pattern {:?}",
                         assign_expr.left
                     ))
                 }
             },
+            // AssignTarget::Pat(pat) => match pat.as_ref() {
+            //     Pat::Expr(expr) => self.transpile_expr(expr)?,
+            //     Pat::Ident(ident) => format!("{}", ident.sym),
+                _ => {
+                    return Err(anyhow!(
+                        "Unsupported assignment pattern {:?}",
+                        assign_expr.left
+                    ))
+                }
+            // },
         };
         let right = self.transpile_expr(&assign_expr.right)?;
         let op = match assign_expr.op {
@@ -641,7 +649,7 @@ impl Transpiler {
 
     fn transpile_arrow_expr(&mut self, arrow_expr: &ArrowExpr) -> Result<String> {
         let param_destructure = self.transpile_param_destructure(arrow_expr.params.iter())?;
-        let body = match &arrow_expr.body {
+        let body = match &*arrow_expr.body {
             BlockStmtOrExpr::Expr(expr) => format!("return {};", self.transpile_expr(expr)?),
             BlockStmtOrExpr::BlockStmt(block_stmt) => self.transpile_block_stmt(block_stmt)?,
         };
