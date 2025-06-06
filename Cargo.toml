@@ -4,12 +4,22 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-swc_ecma_parser =  "0.117.0"
-swc_ecma_visit = "0.76.0"
-swc_common = "0.27.0"
+swc_atoms = "^5.0.0"
+swc_common = "^11.0.0"
+swc_ecma_ast = "^11.0.0"
+swc_ecma_compat_es2015 = "^16.0.0"
+swc_ecma_minifier = "^20.0.0"
+swc_ecma_transforms_base = "^15.0.0"
+swc_ecma_utils = "^15.0.0"
+swc_ecma_visit = "^11.0.0"
+swc_bundler = "^19.0.0"
+swc_ecma_loader = "^11.0.0"
+swc_ecma_parser = "^14.0.0"
+swc_ecma_codegen = "^13"
+
 thiserror = "1.0.32"
 anyhow = "1.0.43"
-swc_ecma_ast = "0.90.0"
+
 clap = { version = "3.2.16", features = ["derive"] }
 
 [dev-dependencies]
