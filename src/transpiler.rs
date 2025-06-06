@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use swc_ecma_ast::*;
 
 pub struct Transpiler {
@@ -442,6 +442,7 @@ impl Transpiler {
 
     fn transpile_generator_function(&mut self, function: &Function) -> Result<String> {
         assert!(function.is_generator);
+        let old = self.is_generator;
         self.is_generator = true;
         let param_destructure =
             self.transpile_param_destructure(function.params.iter().map(|param| &param.pat))?;
@@ -449,7 +450,7 @@ impl Transpiler {
             Some(block_stmt) => self.transpile_block_stmt(block_stmt)?,
             _ => return Err(anyhow!("Function lacks a body")),
         };
-        self.is_generator = false;
+        self.is_generator = old;
         Ok(format!(
             "JSValue::new_generator_function([=](JSValue thisArg, std::vector<JSValue>& args) mutable -> JSGeneratorAdapter {{
                     {}
@@ -461,12 +462,15 @@ impl Transpiler {
     }
 
     fn transpile_plain_function(&mut self, function: &Function) -> Result<String> {
+        let old = self.is_generator;
+        self.is_generator = false;
         let param_destructure =
             self.transpile_param_destructure(function.params.iter().map(|param| &param.pat))?;
         let body = match &function.body {
             Some(block_stmt) => self.transpile_block_stmt(block_stmt)?,
             _ => return Err(anyhow!("Function lacks a body")),
         };
+        self.is_generator = old;
         Ok(format!(
             "JSValue::new_function([=](JSValue thisArg, std::vector<JSValue>& args) mutable -> JSValue {{
                     {}
@@ -614,7 +618,17 @@ impl Transpiler {
             BinaryOp::LogicalAnd => "&&",
             BinaryOp::LogicalOr => "||",
             BinaryOp::Mod => "%",
-            _ => return Err(anyhow!("Unsupported binary operation {:?}", bin_expr.op)),
+     
+            BinaryOp::LShift => "<<",
+            BinaryOp::RShift => ".shr",
+            BinaryOp::ZeroFillRShift => ".zfshr",
+            BinaryOp::Sub => "-",
+            BinaryOp::Div => "/",
+            BinaryOp::BitOr => "|",
+            BinaryOp::BitXor => "^",
+            BinaryOp::BitAnd => "&",
+          
+           _ => bail!("invalid binop")
         };
         Ok(format!("({}){}({})", left, op, right))
     }

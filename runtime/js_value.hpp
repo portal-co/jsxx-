@@ -42,7 +42,7 @@ enum JSValueType : char {
 class JSValue {
   using Box = std::variant<JSUndefined, JSBool, JSNumber, JSString,
                            std::shared_ptr<JSArray>, std::shared_ptr<JSObject>,
-                           JSFunction, std::shared_ptr<JSObject>>;
+                           std::shared_ptr<JSFunction>, std::shared_ptr<JSObject>>;
 
   using Getter = std::function<JSValue(JSValue)>;
   using Setter = std::function<JSValue(JSValue, JSValue)>;

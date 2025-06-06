@@ -68,6 +68,7 @@ public:
 };
 
 class JSObject : public JSBase {
+  
 public:
   JSObject();
   JSObject(std::vector<std::pair<JSValue, JSValue>> data);

@@ -35,7 +35,7 @@ JSValue::JSValue(JSString v)
       parent_value{} {};
 
 JSValue::JSValue(JSFunction v)
-    : value{new Box{std::in_place_index<JSValueType::FUNCTION>, v}},
+    : value{new Box{std::in_place_index<JSValueType::FUNCTION>, shared_ptr<JSFunction>(new JSFunction(vS))}},
       parent_value{} {};
 
 JSValue::JSValue(JSObject v)
