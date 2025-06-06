@@ -79,7 +79,7 @@ public:
 
 using ExternFunc = std::function<JSValue(JSValue, std::vector<JSValue> &)>;
 using ExternFuncPtr = JSValue (*)(JSValue, std::vector<JSValue> &);
-class JSFunction : public JSBase {
+class JSFunction : public JSObject {
 
 public:
   JSFunction(ExternFunc f);

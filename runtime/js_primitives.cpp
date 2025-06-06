@@ -231,7 +231,7 @@ JSValue JSObject::get_property(const JSValue key, JSValue parent) {
           }));
 }
 
-JSFunction::JSFunction(ExternFunc f) : JSBase(), internal{f} {};
+JSFunction::JSFunction(ExternFunc f) : JSObject(), internal{f} {};
 
 JSValue JSFunction::call(JSValue thisArg, std::vector<JSValue> &args) {
   return this->internal(thisArg, args);

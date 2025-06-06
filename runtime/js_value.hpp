@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <variant>
@@ -51,6 +52,7 @@ public:
   JSValue(bool v);
   JSValue(JSBool v);
   JSValue(double v);
+  inline JSValue(uint32_t v) : JSValue((double)((int32_t)v)) {}
   JSValue(JSNumber v);
   JSValue(const char *v);
   JSValue(std::string v);
@@ -98,6 +100,9 @@ public:
 
   JSValueType type() const;
   double coerce_to_double() const;
+  inline uint32_t coerce_to_u32() {
+    return (uint32_t)((int32_t)coerce_to_double());
+  }
   std::string coerce_to_string() const;
   bool coerce_to_bool() const;
 
