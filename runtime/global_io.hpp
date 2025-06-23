@@ -1,6 +1,6 @@
 #pragma once
 
-#include "js_value.hpp"
+#include "js_primitives.hpp"
 
 class JSValue;
 

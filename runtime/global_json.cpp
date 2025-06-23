@@ -157,9 +157,9 @@ static std::string json_stringify_value(JSValue v) {
   if (v.type() == JSValueType::OBJECT)
     return json_stringify_object(*std::get<JSValueType::OBJECT>(*v.value));
   if (v.type() == JSValueType::NUMBER)
-    return json_stringify_number(std::get<JSValueType::NUMBER>(*v.value));
+    return json_stringify_number(*std::get<JSValueType::NUMBER>(*v.value));
   if (v.type() == JSValueType::STRING)
-    return json_stringify_string(std::get<JSValueType::STRING>(*v.value));
+    return json_stringify_string(*std::get<JSValueType::STRING>(*v.value));
   if (v.type() == JSValueType::BOOL)
     return v.coerce_to_string();
   return std::string("<IDK MAN>");

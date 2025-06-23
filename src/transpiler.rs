@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, mem::replace};
 
 use anyhow::{anyhow, bail, Result};
 use swc_ecma_ast::*;
@@ -7,6 +7,8 @@ pub struct Transpiler {
     pub globals: Vec<crate::globals::Global>,
     pub feature_exceptions: bool,
     is_generator: bool,
+    counter: u64,
+    catch_id: u64,
 }
 
 impl Transpiler {
@@ -15,7 +17,14 @@ impl Transpiler {
             globals: vec![],
             is_generator: false,
             feature_exceptions: true,
+            counter: 0,
+            catch_id: 0,
         }
+    }
+
+    fn count(&mut self) -> u64 {
+        let a = self.counter + 1;
+        replace(&mut self.counter, a)
     }
 
     pub fn transpile_module(&mut self, module: &Module) -> Result<String> {
@@ -85,6 +94,7 @@ impl Transpiler {
                 #include "runtime/js_value.hpp"
                 #include "runtime/exceptions.hpp"
 
+                #define js_throw_0(a) js_throw_noexcept(a)
                 int prog() {{
                     {inits}
                     {global_exprs}
@@ -117,6 +127,8 @@ impl Transpiler {
             Stmt::Break(break_stmt) => self.transpile_break_stmt(break_stmt)?,
             Stmt::Try(try_stmt) => self.transpile_try_stmt(try_stmt)?,
             Stmt::Throw(throw_stmt) => self.transpile_throw_stmt(throw_stmt)?,
+            Stmt::Labeled(l) => self.transpile_labelled_statement(l)?,
+            Stmt::Continue(c) => self.transpile_continue_stmt(c)?,
             _ => return Err(anyhow!("Unsupported statemt: {:?}", stmt)),
         };
         Ok(format!("{};", transpiled_stmt))
@@ -124,10 +136,20 @@ impl Transpiler {
 
     fn transpile_throw_stmt(&mut self, throw_stmt: &ThrowStmt) -> Result<String> {
         let expr = self.transpile_expr(&throw_stmt.arg)?;
-        Ok(format!("js_throw({})", expr))
+        let ret_style = if self.is_generator {
+            "co_return"
+        } else {
+            "return"
+        };
+        let (a, b) = if self.feature_exceptions {
+            (format!(""), format!(""))
+        } else {
+            (format!("_{}", self.catch_id), format!(" {ret_style}"))
+        };
+        Ok(format!("{b}js_throw{a}({})", expr))
     }
 
-    fn transpile_catch_clause(&mut self, catch_clause: &CatchClause) -> Result<String> {
+    fn transpile_catch_clause(&mut self, catch_clause: &CatchClause, l: u64) -> Result<String> {
         let ident = catch_clause
             .param
             .as_ref()
@@ -141,27 +163,43 @@ impl Transpiler {
             .transpose()?
             .unwrap_or(format!("__unused"));
         let body = self.transpile_block_stmt(&catch_clause.body)?;
-
-        Ok(format!(
-            r#"
+        if self.feature_exceptions {
+            Ok(format!(
+                r#"
                 catch(JSValue {}) {{
                     {}
                 }}
             "#,
-            ident, body
-        ))
+                ident, body
+            ))
+        } else {
+            Ok(format!(
+                "while(0){{
+                    xl{l}:
+                    JSValue {ident}=exn;
+                    exn = JSValue::undefined();
+                    {ident}.thrown=false;
+                    {body}
+                }}"
+            ))
+        }
     }
 
     fn transpile_try_stmt(&mut self, try_stmt: &TryStmt) -> Result<String> {
         if try_stmt.finalizer.is_some() {
             return Err(anyhow!("`finally` not supported yet"));
         }
+        let l = self.count();
+        let l2 = l + 1;
+        let o = replace(&mut self.catch_id, l2);
         let block = self.transpile_block_stmt(&try_stmt.block)?;
+        self.catch_id = o;
         let handler = self.transpile_catch_clause(
             try_stmt
                 .handler
                 .as_ref()
                 .ok_or(anyhow!("Missing catch handler"))?,
+            l2,
         )?;
 
         if self.feature_exceptions {
@@ -178,7 +216,9 @@ impl Transpiler {
             Ok(format!(
                 r#"
                     {{
+                    #define js_throw_{l2}(a) ({{exn=a;goto xl{l2};exn}})
                         {}
+                        {handler}
                     }}
                 "#,
                 block
@@ -207,8 +247,29 @@ impl Transpiler {
         ))
     }
 
-    fn transpile_break_stmt(&mut self, _break_stmt: &BreakStmt) -> Result<String> {
-        Ok(format!("break"))
+    fn transpile_labelled_statement(&mut self, l: &LabeledStmt) -> Result<String> {
+        let b = self.transpile_stmt(&l.body)?;
+        let l = l.label.sym.as_str();
+        Ok(format!(
+            "
+        C{l}:
+        {b};
+        B{l}:;"
+        ))
+    }
+
+    fn transpile_break_stmt(&mut self, break_stmt: &BreakStmt) -> Result<String> {
+        Ok(match break_stmt.label.as_ref() {
+            None => format!("break"),
+            Some(a) => format!("goto B{}", a.sym),
+        })
+    }
+
+    fn transpile_continue_stmt(&mut self, break_stmt: &ContinueStmt) -> Result<String> {
+        Ok(match break_stmt.label.as_ref() {
+            None => format!("continue"),
+            Some(a) => format!("goto C{}", a.sym),
+        })
     }
 
     fn transpile_while_stmt(&mut self, while_stmt: &WhileStmt) -> Result<String> {
@@ -333,11 +394,12 @@ impl Transpiler {
     }
 
     fn transpile_expr(&mut self, expr: &Expr) -> Result<String> {
-        match expr {
+        let mut x = match expr {
             Expr::Ident(ident) => Ok(format!("{}", ident.sym)),
             Expr::Lit(literal) => self.transpile_literal(literal),
             Expr::Array(array_lit) => self.transpile_array_literal(array_lit),
             Expr::Call(call_expr) => self.transpile_call_expr(call_expr),
+            Expr::New(new_expr) => self.transpile_new_expr(new_expr),
             Expr::Member(member_expr) => self.transpile_member_expr(member_expr),
             Expr::Arrow(arrow_expr) => self.transpile_arrow_expr(arrow_expr),
             Expr::Bin(bin_expr) => self.transpile_bin_expr(bin_expr),
@@ -352,7 +414,26 @@ impl Transpiler {
             Expr::Update(update_expr) => self.transpile_update_expr(update_expr),
             Expr::Yield(yield_expr) => self.transpile_yield_expr(yield_expr),
             _ => Err(anyhow!("Unsupported expression {:?}", expr)),
+        }?;
+        if !self.feature_exceptions {
+            let c = self.count();
+            let ret_style = if self.is_generator {
+                "co_return"
+            } else {
+                "return"
+            };
+            x = format!(
+                "({{
+                    auto ex{c}={x};
+                    if(ex{c}.thrown){{
+                        {ret_style} js_throw_{}(ex{c});
+                    }};
+                    ex{c}
+                }})",
+                self.catch_id
+            );
         }
+        Ok(x)
     }
 
     fn transpile_yield_expr(&mut self, yield_expr: &YieldExpr) -> Result<String> {
@@ -400,7 +481,7 @@ impl Transpiler {
         let left = match &assign_expr.left {
             AssignTarget::Simple(simp) => match simp {
                 SimpleAssignTarget::Ident(ident) => format!("{}", ident.sym),
-                   _ => {
+                _ => {
                     return Err(anyhow!(
                         "Unsupported assignment pattern {:?}",
                         assign_expr.left
@@ -410,13 +491,12 @@ impl Transpiler {
             // AssignTarget::Pat(pat) => match pat.as_ref() {
             //     Pat::Expr(expr) => self.transpile_expr(expr)?,
             //     Pat::Ident(ident) => format!("{}", ident.sym),
-                _ => {
-                    return Err(anyhow!(
-                        "Unsupported assignment pattern {:?}",
-                        assign_expr.left
-                    ))
-                }
-            // },
+            _ => {
+                return Err(anyhow!(
+                    "Unsupported assignment pattern {:?}",
+                    assign_expr.left
+                ))
+            } // },
         };
         let right = self.transpile_expr(&assign_expr.right)?;
         let op = match assign_expr.op {
@@ -443,6 +523,7 @@ impl Transpiler {
     fn transpile_generator_function(&mut self, function: &Function) -> Result<String> {
         assert!(function.is_generator);
         let old = self.is_generator;
+        let o = replace(&mut self.catch_id, 0);
         self.is_generator = true;
         let param_destructure =
             self.transpile_param_destructure(function.params.iter().map(|param| &param.pat))?;
@@ -451,6 +532,7 @@ impl Transpiler {
             _ => return Err(anyhow!("Function lacks a body")),
         };
         self.is_generator = old;
+        self.catch_id = o;
         Ok(format!(
             "JSValue::new_generator_function([=](JSValue thisArg, std::vector<JSValue>& args) mutable -> JSGeneratorAdapter {{
                     {}
@@ -463,6 +545,7 @@ impl Transpiler {
 
     fn transpile_plain_function(&mut self, function: &Function) -> Result<String> {
         let old = self.is_generator;
+        let o = replace(&mut self.catch_id, 0);
         self.is_generator = false;
         let param_destructure =
             self.transpile_param_destructure(function.params.iter().map(|param| &param.pat))?;
@@ -471,6 +554,7 @@ impl Transpiler {
             _ => return Err(anyhow!("Function lacks a body")),
         };
         self.is_generator = old;
+        self.catch_id = o;
         Ok(format!(
             "JSValue::new_function([=](JSValue thisArg, std::vector<JSValue>& args) mutable -> JSValue {{
                     {}
@@ -618,7 +702,7 @@ impl Transpiler {
             BinaryOp::LogicalAnd => "&&",
             BinaryOp::LogicalOr => "||",
             BinaryOp::Mod => "%",
-     
+
             BinaryOp::LShift => "<<",
             BinaryOp::RShift => ".shr",
             BinaryOp::ZeroFillRShift => ".zfshr",
@@ -627,8 +711,8 @@ impl Transpiler {
             BinaryOp::BitOr => "|",
             BinaryOp::BitXor => "^",
             BinaryOp::BitAnd => "&",
-          
-           _ => bail!("invalid binop")
+
+            _ => bail!("invalid binop"),
         };
         Ok(format!("({}){}({})", left, op, right))
     }
@@ -708,6 +792,23 @@ impl Transpiler {
             .collect();
         let arg_expr = Result::<Vec<String>>::from_iter(transpiled_args)?.join(",");
         Ok(format!("{}({{{}}})", callee, arg_expr))
+    }
+
+    fn transpile_new_expr(&mut self, call_expr: &NewExpr) -> Result<String> {
+        let callee = self.transpile_expr(&*call_expr.callee)?;
+        let transpiled_args: Vec<Result<String>> = call_expr
+            .args
+            .iter()
+            .flatten()
+            .map(|arg| {
+                Ok(format!(
+                    "({}).boxed_value()",
+                    self.transpile_expr(&arg.expr)?
+                ))
+            })
+            .collect();
+        let arg_expr = Result::<Vec<String>>::from_iter(transpiled_args)?.join(",");
+        Ok(format!("({}).creat({{{}}})", callee, arg_expr))
     }
 
     fn transpile_array_literal(&mut self, array_lit: &ArrayLit) -> Result<String> {

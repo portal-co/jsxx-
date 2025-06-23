@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <variant>
+#include <vector>
 
-#include "js_primitives.hpp"
+// #include "js_primitives.hpp"
 
 using std::optional;
 using std::shared_ptr;
@@ -21,6 +23,7 @@ class JSFunction;
 class JSIterator;
 class JSGeneratorAdapter;
 class JSValue;
+class JSArrayBuffer;
 
 // Idk what C++ wants from me... This type alias is defined in
 // `js_primitives.hpp` but the cyclic includes seem to make it impossible to see
@@ -36,13 +39,15 @@ enum JSValueType : char {
   STRING,
   ARRAY,
   OBJECT,
-  FUNCTION
+  FUNCTION,
+  ARRAYBUFFER
 };
 
 class JSValue {
-  using Box = std::variant<JSUndefined, JSBool, JSNumber, JSString,
-                           std::shared_ptr<JSArray>, std::shared_ptr<JSObject>,
-                           std::shared_ptr<JSFunction>, std::shared_ptr<JSObject>>;
+  using Box =
+      std::variant<std::shared_ptr<JSUndefined>, std::shared_ptr<JSBool>, std::shared_ptr<JSNumber>, std::shared_ptr<JSString>,
+                   std::shared_ptr<JSArray>, std::shared_ptr<JSObject>,
+                   std::shared_ptr<JSFunction>, std::shared_ptr<JSArrayBuffer>>;
 
   using Getter = std::function<JSValue(JSValue)>;
   using Setter = std::function<JSValue(JSValue, JSValue)>;
@@ -52,7 +57,6 @@ public:
   JSValue(bool v);
   JSValue(JSBool v);
   JSValue(double v);
-  inline JSValue(uint32_t v) : JSValue((double)((int32_t)v)) {}
   JSValue(JSNumber v);
   JSValue(const char *v);
   JSValue(std::string v);
@@ -61,6 +65,8 @@ public:
   JSValue(JSObject v);
   JSValue(JSArray v);
   JSValue(Box v);
+
+  JSValue(uint32_t v);
 
   JSValue operator=(const Box &other);
   JSValue &operator++();   // Prefix
@@ -97,12 +103,11 @@ public:
 
   JSValue get_property(const JSValue key, JSValue parent);
   JSValue apply(JSValue thisArg, std::vector<JSValue> args);
+  JSValue create(std::vector<JSValue> args);
 
   JSValueType type() const;
   double coerce_to_double() const;
-  inline uint32_t coerce_to_u32() {
-    return (uint32_t)((int32_t)coerce_to_double());
-  }
+  uint32_t coerce_to_u32() const;
   std::string coerce_to_string() const;
   bool coerce_to_bool() const;
 
@@ -113,6 +118,7 @@ public:
   const Box &boxed_value() const;
 
   shared_ptr<Box> value;
+  bool thrown = false;
   optional<shared_ptr<JSValue>> parent_value;
 
   std::optional<Getter> getter = std::nullopt;

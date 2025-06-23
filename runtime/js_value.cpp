@@ -1,41 +1,43 @@
-#include "js_value.hpp"
 #include "exceptions.hpp"
+#include "js_primitives.hpp"
 #include <cmath>
+#include <cstdint>
 
 JSValue::JSValue()
     : value{new Box{std::in_place_index<JSValueType::UNDEFINED>,
-                    JSUndefined{}}} {};
+                    new JSUndefined{}}} {};
 
 JSValue::JSValue(bool v)
-    : value{new Box{std::in_place_index<JSValueType::BOOL>, JSBool{v}}},
+    : value{new Box{std::in_place_index<JSValueType::BOOL>, new JSBool{v}}},
       parent_value{} {};
 
 JSValue::JSValue(JSBool v)
-    : value{new Box{std::in_place_index<JSValueType::BOOL>, v}},
+    : value{new Box{std::in_place_index<JSValueType::BOOL>, new JSBool(v)}},
       parent_value{} {};
 
 JSValue::JSValue(double v)
-    : value{new Box{std::in_place_index<JSValueType::NUMBER>, JSNumber{v}}},
+    : value{new Box{std::in_place_index<JSValueType::NUMBER>, new JSNumber{v}}},
       parent_value{} {};
 
 JSValue::JSValue(JSNumber v)
-    : value{new Box{std::in_place_index<JSValueType::NUMBER>, v}},
+    : value{new Box{std::in_place_index<JSValueType::NUMBER>, new JSNumber(v)}},
       parent_value{} {};
 
 JSValue::JSValue(const char *v)
-    : value{new Box{std::in_place_index<JSValueType::STRING>, JSString{v}}},
+    : value{new Box{std::in_place_index<JSValueType::STRING>, new JSString{v}}},
       parent_value{} {};
 
 JSValue::JSValue(std::string v)
-    : value{new Box{std::in_place_index<JSValueType::STRING>, JSString{v}}},
+    : value{new Box{std::in_place_index<JSValueType::STRING>, new JSString{v}}},
       parent_value{} {};
 
 JSValue::JSValue(JSString v)
-    : value{new Box{std::in_place_index<JSValueType::STRING>, v}},
+    : value{new Box{std::in_place_index<JSValueType::STRING>, new JSString(v)}},
       parent_value{} {};
 
 JSValue::JSValue(JSFunction v)
-    : value{new Box{std::in_place_index<JSValueType::FUNCTION>, shared_ptr<JSFunction>(new JSFunction(vS))}},
+    : value{new Box{std::in_place_index<JSValueType::FUNCTION>,
+                    shared_ptr<JSFunction>(new JSFunction(v))}},
       parent_value{} {};
 
 JSValue::JSValue(JSObject v)
@@ -47,6 +49,8 @@ JSValue::JSValue(JSArray v)
     : value{new Box{std::in_place_index<JSValueType::ARRAY>,
                     shared_ptr<JSArray>{new JSArray{v}}}},
       parent_value{} {};
+
+JSValue::JSValue(uint32_t v) : JSValue(static_cast<double>((int32_t)v)) {};
 
 JSValue::JSValue(Box v) : value{new Box{v}}, parent_value{} {};
 
@@ -65,12 +69,12 @@ JSValue JSValue::new_function(ExternFunc f) { return JSValue{JSFunction{f}}; }
 JSValue JSValue::new_generator_function(CoroutineFunc gen_f) {
   return JSValue::new_function([=](JSValue thisArg,
                                    std::vector<JSValue> &args) mutable
-                               -> JSValue {
-    std::shared_ptr<std::optional<
-        std::experimental::coroutine_handle<JSGeneratorAdapter::promise_type>>>
-        corot =
-            std::make_shared<std::optional<std::experimental::coroutine_handle<
-                JSGeneratorAdapter::promise_type>>>(std::nullopt);
+                                   -> JSValue {
+    std::shared_ptr<
+        std::optional<std::coroutine_handle<JSGeneratorAdapter::promise_type>>>
+        corot = std::make_shared<std::optional<
+            std::coroutine_handle<JSGeneratorAdapter::promise_type>>>(
+            std::nullopt);
     return JSValue::iterator_from_next_func(JSValue::new_function(
         [corot, gen_f](JSValue thisArg,
                        std::vector<JSValue> &args) mutable -> JSValue {
@@ -134,15 +138,15 @@ JSValue JSValue::operator!() { return JSValue{!this->coerce_to_bool()}; }
 
 JSValue JSValue::operator==(const JSValue other) const {
   if (this->type() == JSValueType::NUMBER) {
-    return JSValue{std::get<JSValueType::NUMBER>(*this->value).internal ==
+    return JSValue{std::get<JSValueType::NUMBER>(*this->value)->internal ==
                    other.coerce_to_double()};
   }
   if (this->type() == JSValueType::STRING) {
-    return JSValue{std::get<JSValueType::STRING>(*this->value).internal ==
+    return JSValue{std::get<JSValueType::STRING>(*this->value)->internal ==
                    other.coerce_to_string()};
   }
   if (this->type() == JSValueType::BOOL) {
-    return JSValue{std::get<JSValueType::BOOL>(*this->value).internal ==
+    return JSValue{std::get<JSValueType::BOOL>(*this->value)->internal ==
                    other.coerce_to_bool()};
   }
   if (this->type() == JSValueType::ARRAY) {
@@ -164,7 +168,7 @@ JSValue JSValue::operator<(const JSValue other) {
   JSValue v1{this->boxed_value()};
   JSValue v2{other.boxed_value()};
   if (v1.type() == JSValueType::NUMBER) {
-    return JSValue{std::get<JSValueType::NUMBER>(*v1.value).internal <
+    return JSValue{std::get<JSValueType::NUMBER>(*v1.value)->internal <
                    v2.coerce_to_double()};
   }
   return JSValue{false};
@@ -194,11 +198,11 @@ JSValue JSValue::operator>=(const JSValue other) { return !(*this < other); }
 
 JSValue JSValue::operator+(JSValue other) {
   if (this->type() == JSValueType::NUMBER) {
-    return JSValue{std::get<JSValueType::NUMBER>(*this->value).internal +
+    return JSValue{std::get<JSValueType::NUMBER>(*this->value)->internal +
                    other.coerce_to_double()};
   }
   if (this->type() == JSValueType::STRING) {
-    return JSValue{std::get<JSValueType::STRING>(*this->value).internal +
+    return JSValue{std::get<JSValueType::STRING>(*this->value)->internal +
                    other.coerce_to_string()};
   }
   return JSValue{"Addition not implemented for this type yet"};
@@ -206,7 +210,7 @@ JSValue JSValue::operator+(JSValue other) {
 
 JSValue JSValue::operator*(JSValue other) {
   if (this->type() == JSValueType::NUMBER) {
-    return JSValue{std::get<JSValueType::NUMBER>(*this->value).internal *
+    return JSValue{std::get<JSValueType::NUMBER>(*this->value)->internal *
                    other.coerce_to_double()};
   }
   return JSValue{"Multiplication not implemented for this type yet"};
@@ -216,7 +220,7 @@ JSValue JSValue::operator%(JSValue other) {
   if (this->type() == JSValueType::NUMBER) {
     return JSValue{static_cast<double>(
         static_cast<uint32_t>(
-            std::get<JSValueType::NUMBER>(*this->value).internal) %
+            std::get<JSValueType::NUMBER>(*this->value)->internal) %
         static_cast<uint32_t>(other.coerce_to_double()))};
   }
   return JSValue{"Modulo not implemented for this type yet"};
@@ -253,13 +257,13 @@ JSValue JSValue::get_property(const JSValue key, JSValue parent) {
     js_throw(JSValue{"Can’t read property of undefined"});
     break;
   case JSValueType::BOOL:
-    v = std::get<JSValueType::BOOL>(*this->value).get_property(key, parent);
+    v = std::get<JSValueType::BOOL>(*this->value)->get_property(key, parent);
     break;
   case JSValueType::NUMBER:
-    v = std::get<JSValueType::NUMBER>(*this->value).get_property(key, parent);
+    v = std::get<JSValueType::NUMBER>(*this->value)->get_property(key, parent);
     break;
   case JSValueType::STRING:
-    v = std::get<JSValueType::STRING>(*this->value).get_property(key, parent);
+    v = std::get<JSValueType::STRING>(*this->value)->get_property(key, parent);
     break;
   case JSValueType::ARRAY:
     v = std::get<JSValueType::ARRAY>(*this->value)->get_property(key, parent);
@@ -268,7 +272,12 @@ JSValue JSValue::get_property(const JSValue key, JSValue parent) {
     v = std::get<JSValueType::OBJECT>(*this->value)->get_property(key, parent);
     break;
   case JSValueType::FUNCTION:
-    v = std::get<JSValueType::FUNCTION>(*this->value).get_property(key, parent);
+    v = std::get<JSValueType::FUNCTION>(*this->value)
+            ->get_property(key, parent);
+    break;
+  case JSValueType::ARRAYBUFFER:
+    v = std::get<JSValueType::ARRAYBUFFER>(*this->value)
+            ->get_property(key, parent);
     break;
   };
   v.set_parent(*this);
@@ -282,14 +291,14 @@ JSValue JSValue::with_getter_setter(JSValue getter, JSValue setter) {
       return JSValue::undefined();
     auto f = std::get<JSValueType::FUNCTION>(*getter.value);
     std::vector<JSValue> params{};
-    return f.call(v, params);
+    return f->call(v, params);
   }};
   b.setter = std::optional{[=](JSValue v, JSValue new_v) -> JSValue {
     if (setter.type() != JSValueType::FUNCTION)
       return JSValue::undefined();
     auto f = std::get<JSValueType::FUNCTION>(*setter.value);
     std::vector<JSValue> params{new_v};
-    return f.call(v, params);
+    return f->call(v, params);
   }};
   return b;
 }
@@ -305,18 +314,22 @@ bool JSValue::is_undefined() const {
 double JSValue::coerce_to_double() const {
   switch (this->type()) {
   case JSValueType::BOOL:
-    return std::get<JSValueType::BOOL>(*this->value).internal ? 1 : 0;
+    return std::get<JSValueType::BOOL>(*this->value)->internal ? 1 : 0;
   case JSValueType::NUMBER:
-    return std::get<JSValueType::NUMBER>(*this->value).internal;
+    return std::get<JSValueType::NUMBER>(*this->value)->internal;
   case JSValueType::STRING:
-    return std::stod(std::get<JSValueType::STRING>(*this->value).internal);
+    return std::stod(std::get<JSValueType::STRING>(*this->value)->internal);
   default:
     return NAN;
   }
 }
 
+uint32_t JSValue::coerce_to_u32() const {
+  return (uint32_t)((int32_t)coerce_to_double());
+}
+
 double &JSValue::get_number() {
-  return std::get<JSValueType::NUMBER>(*this->value).internal;
+  return std::get<JSValueType::NUMBER>(*this->value)->internal;
 }
 
 std::string JSValue::coerce_to_string() const {
@@ -324,19 +337,22 @@ std::string JSValue::coerce_to_string() const {
   case JSValueType::UNDEFINED:
     return "undefined";
   case JSValueType::BOOL:
-    return std::get<JSValueType::BOOL>(*this->value).internal
+    return std::get<JSValueType::BOOL>(*this->value)->internal
                ? std::string{"true"}
                : std::string{"false"};
   case JSValueType::NUMBER:
-    return std::to_string(std::get<JSValueType::NUMBER>(*this->value).internal);
+    return std::to_string(
+        std::get<JSValueType::NUMBER>(*this->value)->internal);
   case JSValueType::STRING:
-    return std::get<JSValueType::STRING>(*this->value).internal;
+    return std::get<JSValueType::STRING>(*this->value)->internal;
   case JSValueType::ARRAY:
     return "[Array]";
   case JSValueType::OBJECT:
     return "[Object object]";
   case JSValueType::FUNCTION:
     return "<function>";
+  case JSValueType::ARRAYBUFFER:
+    return "[ArrayBuffer]";
   }
   return "?";
 }
@@ -346,17 +362,20 @@ bool JSValue::coerce_to_bool() const {
   case JSValueType::UNDEFINED:
     return false;
   case JSValueType::BOOL:
-    return std::get<JSValueType::BOOL>(*this->value).internal;
+    return std::get<JSValueType::BOOL>(*this->value)->internal;
   case JSValueType::NUMBER:
-    return std::get<JSValueType::NUMBER>(*this->value).internal > 0;
+    return std::get<JSValueType::NUMBER>(*this->value)->internal > 0;
   case JSValueType::STRING:
-    return std::get<JSValueType::STRING>(*this->value).internal.length() > 0;
+    return std::get<JSValueType::STRING>(*this->value)->internal.length() > 0;
   case JSValueType::ARRAY:
     return std::get<JSValueType::ARRAY>(*this->value)->internal->size() > 0;
   case JSValueType::OBJECT:
     return true;
   case JSValueType::FUNCTION:
     return true;
+  case JSValueType::ARRAYBUFFER:
+    return std::get<JSValueType::ARRAYBUFFER>(*this->value)->internal->size() >
+           0;
   }
   return "?";
 }
@@ -365,8 +384,25 @@ JSValue JSValue::apply(JSValue thisArg, std::vector<JSValue> args) {
   if (this->type() != JSValueType::FUNCTION) {
     js_throw(JSValue{"Calling a non-function"});
   }
-  JSFunction f = std::get<JSValueType::FUNCTION>(*this->value);
+  JSFunction f = *std::get<JSValueType::FUNCTION>(*this->value);
   return f.call(thisArg, args);
+}
+
+JSValue JSValue::create(std::vector<JSValue> args) {
+  if (this->type() != JSValueType::FUNCTION) {
+    js_throw(JSValue{"Calling a non-function"});
+  }
+  JSFunction f = *std::get<JSValueType::FUNCTION>(*this->value);
+  JSObject obj;
+  obj.$prop$__proto__ = f.$prop$prototype;
+  obj.$prop$constructor = this->boxed_value();
+  JSValue thisArg(obj);
+  auto res = f.call(thisArg, args);
+  if (res.thrown) {
+    return res;
+  } else {
+    return thisArg;
+  }
 }
 
 void JSValue::set_parent(JSValue parent) {

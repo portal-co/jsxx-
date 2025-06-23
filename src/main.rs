@@ -1,11 +1,13 @@
 use std::{
+    collections::{BTreeMap, BTreeSet},
     fs::File,
     io::{Read, Write},
     process::{Command, Stdio},
 };
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
+use serde::Deserialize;
 use swc_common::BytePos;
 use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser as ESParser, StringInput, Syntax};
 
@@ -30,6 +32,14 @@ struct Args {
     /// Target WebAssembly
     #[clap(long = "wasm", default_value_t = false, value_parser)]
     wasm: bool,
+
+    /// Run as an internal tool
+    #[clap(long = "itool", default_value_t = false, value_parser)]
+    itool: bool,
+
+    /// Output file
+    #[clap(long = "output", short = 'o', value_parser)]
+    out: Option<String>,
 
     /// Extra flags to path to clang++
     extra_flags: Vec<String>,
@@ -63,6 +73,7 @@ fn cpp_to_binary(
     outputname: String,
     clang_path: String,
     flags: &[String],
+    // rtobjs: &[String],
 ) -> Result<()> {
     let cpp_file_name = format!("./{}.cpp", outputname);
     let mut tempfile = File::create(&cpp_file_name)?;
@@ -78,12 +89,6 @@ fn cpp_to_binary(
                 "-o",
                 outputname.as_ref(),
                 cpp_file_name.as_ref(),
-                "runtime/global_json.cpp",
-                "runtime/global_symbol.cpp",
-                "runtime/global_io.cpp",
-                "runtime/js_primitives.cpp",
-                "runtime/js_value.cpp",
-                "runtime/exceptions.cpp",
             ]
             .into_iter(),
         )
@@ -107,33 +112,78 @@ fn main() -> Result<()> {
     let mut input: String = String::new();
     std::io::stdin().read_to_string(&mut input)?;
 
-    let mut transpiler = transpiler::Transpiler::new();
-    transpiler.feature_exceptions = !args.wasm;
-    let cpp_code = js_to_cpp(transpiler, &input)?;
-
-    if args.emit_cpp {
-        let (_status, stdout, _stderr) =
-            command_utils::pipe_through_shell::<String>("clang-format", &[], cpp_code.as_bytes())?;
-        println!("{}", String::from_utf8(stdout)?);
-    } else {
-        let mut flags = args.extra_flags.clone();
-        let mut extension = "".to_string();
-        if args.wasm {
-            flags.push("-fno-exceptions".to_string());
-            flags.push("--target=wasm32-wasi".to_string());
-            if let Ok(wasi_sdk_prefix) = std::env::var("WASI_SDK_PREFIX") {
-                flags.push(format!("--sysroot={}/share/wasi-sysroot", wasi_sdk_prefix));
-            }
-            extension = ".wasm".to_string();
-        } else {
-            flags.push("-DFEATURE_EXCEPTIONS".to_string());
+    if args.itool {
+        let out = args.out.clone().context("in getting the runtime dir")?;
+        #[derive(Deserialize)]
+        struct Manifest {
+            pub properties: BTreeSet<String>,
         }
-        cpp_to_binary(
-            cpp_code,
-            format!("output{}", extension),
-            args.clang_path,
-            &flags,
+        let j: Manifest = serde_json::from_str(&input)?;
+        let mut base_props_inc = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(format!("{out}/js_primitives_props.hpp"))?;
+        let mut base_props_access = std::fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(format!("{out}/js_primitives_props_access.cpp"))?;
+        write!(
+            base_props_access,
+            "static optional<JSValue> *prop(JSValue key,JSBase &out){{"
         )?;
+        for p in j.properties {
+            write!(base_props_inc, "optional<JSValue> $prop${p};")?;
+            write!(
+                base_props_access,
+                " if(key.coerce_to_string() == \"{p}\")return &out.$prop${p};"
+            )?;
+        }
+        write!(base_props_access, "return 0;}};")?;
+    } else {
+        let mut transpiler = transpiler::Transpiler::new();
+        transpiler.feature_exceptions = !args.wasm;
+        let cpp_code = js_to_cpp(transpiler, &input)?;
+
+        if args.emit_cpp {
+            let (_status, stdout, _stderr) = command_utils::pipe_through_shell::<String>(
+                "clang-format",
+                &[],
+                cpp_code.as_bytes(),
+            )?;
+            let stdout = String::from_utf8(stdout)?;
+            match args.out.as_deref() {
+                None | Some("-") => {
+                    println!("{stdout}");
+                }
+                Some(a) => {
+                    std::fs::write(a, stdout)?;
+                }
+            }
+        } else {
+            let mut flags = args.extra_flags.clone();
+            let mut extension = "".to_string();
+            if args.wasm {
+                flags.push("-fno-exceptions".to_string());
+                flags.push("--target=wasm32-wasi".to_string());
+                if let Ok(wasi_sdk_prefix) = std::env::var("WASI_SDK_PREFIX") {
+                    flags.push(format!("--sysroot={}/share/wasi-sysroot", wasi_sdk_prefix));
+                }
+                extension = ".wasm".to_string();
+            } else {
+                flags.push("-DFEATURE_EXCEPTIONS".to_string());
+            }
+            cpp_to_binary(
+                cpp_code,
+                args.out
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| format!("output{}", extension)),
+                args.clang_path,
+                &flags,
+            )?;
+        }
     }
     Ok(())
 }

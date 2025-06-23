@@ -1,0 +1,12 @@
+{
+    "properties": [
+        "map",
+        "filter",
+        "prototype",
+        "length",
+        "byteLength",
+        "prototype",
+        "__proto__",
+        "constructor"
+    ]
+}

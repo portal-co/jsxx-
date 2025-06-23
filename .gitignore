@@ -4,3 +4,4 @@ output
 testprog
 *.a
 target
+/build

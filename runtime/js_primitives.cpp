@@ -1,18 +1,80 @@
 #include "js_primitives.hpp"
 #include "exceptions.hpp"
-
+#include "js_primitives_props_access.cpp"
+#include "js_value.hpp"
+#include <cstdint>
+#include <optional>
+#include <vector>
 JSBase::JSBase() {}
 
 JSValue JSUndefined::operator==(JSValue &other) {
   return JSValue{other.is_undefined()};
 }
 
-JSValue JSBase::get_property(JSValue key, JSValue parent) {
+void JSBase::insert_property(JSValue key, JSValue value) {
+  auto *p = prop(key, *this);
+  if (p) {
+    *p = value;
+  } else {
+    this->properties.push_back({key, value});
+  }
+}
+
+optional<JSValue> JSBase::get_own_property(JSValue key, JSValue parent) {
+  auto *p = prop(key, *this);
+  if (p) {
+    if (p->has_value())
+      return p->value();
+  }
   auto result = this->get_property_from_list(this->properties, key, parent);
   if (result.has_value()) {
     return result.value();
   }
+  if (this->$prop$__proto__.has_value()) {
+    auto v = this->$prop$__proto__.value();
+    switch (v.type()) {
+    case JSValueType::ARRAY:
+      return std::get<JSValueType::ARRAY>(v.boxed_value())
+          ->get_own_property(key, parent);
+    case JSValueType::ARRAYBUFFER:
+      return std::get<JSValueType::ARRAYBUFFER>(v.boxed_value())
+          ->get_own_property(key, parent);
+    case JSValueType::OBJECT:
+      return std::get<JSValueType::OBJECT>(v.boxed_value())
+          ->get_own_property(key, parent);
+    case JSValueType::FUNCTION:
+      return std::get<JSValueType::FUNCTION>(v.boxed_value())
+          ->get_own_property(key, parent);
+    default:
+    }
+  }
+  return std::nullopt;
+}
 
+JSValue JSBase::get_property(JSValue key, JSValue parent) {
+  // #include "js_primitives_props.cpp"
+  auto o = get_own_property(key, parent);
+  if (o.has_value()) {
+    return o.value();
+  }
+  auto *p = prop(key, *this);
+  if (p) {
+    return JSValue::with_getter_setter(
+        JSValue::new_function(
+            [](JSValue thisArg, std::vector<JSValue> &args) mutable -> JSValue {
+              return JSValue::undefined();
+            }),
+        JSValue::new_function(
+            [=, that = this](JSValue thisArg,
+                             std::vector<JSValue> &args) mutable -> JSValue {
+              JSValue v = JSValue::undefined();
+              if (args.size() > 0) {
+                v = args[0];
+              }
+              *p = v;
+              return JSValue::undefined();
+            }));
+  }
   return JSValue::with_getter_setter(
       JSValue::new_function(
           [](JSValue thisArg, std::vector<JSValue> &args) mutable -> JSValue {
@@ -65,7 +127,7 @@ std::vector<std::pair<JSValue, JSValue>> JSArray_prototype{
 
 JSArray::JSArray() : JSBase(), internal{new std::vector<JSValue>{}} {
   for (const auto &entry : JSArray_prototype) {
-    this->properties.push_back(entry);
+    this->insert_property(entry.first, entry.second);
   }
   std::vector<JSValue> *data = &(*this->internal);
   auto length_prop = JSValue::with_getter_setter(
@@ -82,9 +144,9 @@ JSArray::JSArray() : JSBase(), internal{new std::vector<JSValue>{}} {
                          JSValue::undefined());
             return JSValue::undefined();
           }));
-  this->properties.push_back({JSValue{"length"}, length_prop});
-  this->properties.push_back(
-      {iterator_symbol, JSValue::new_function(&JSArray::iterator_impl)});
+  this->insert_property(JSValue{"length"}, length_prop);
+  this->insert_property(iterator_symbol,
+                        JSValue::new_function(&JSArray::iterator_impl));
 };
 
 JSArray::JSArray(std::vector<JSValue> data) : JSArray() {
@@ -175,6 +237,13 @@ JSValue JSArray::iterator_impl(JSValue thisArg, std::vector<JSValue> &args) {
   auto gen = JSValue::new_generator_function(
       [=](JSValue thisArg,
           std::vector<JSValue> &args) mutable -> JSGeneratorAdapter {
+        if (thisArg.type() == JSValueType::ARRAYBUFFER) {
+          auto arr = std::get<JSValueType::ARRAYBUFFER>(*thisArg.value);
+          for (auto value : *arr->internal) {
+            co_yield JSValue(double(value));
+          }
+          co_return;
+        }
         if (thisArg.type() != JSValueType::ARRAY) {
           js_throw(JSValue{"Called array iterator with a non-array value"});
         }
@@ -188,14 +257,62 @@ JSValue JSArray::iterator_impl(JSValue thisArg, std::vector<JSValue> &args) {
   return gen(args);
 }
 
-JSValue JSArray::get_property(const JSValue key, JSValue parent) {
+optional<JSValue> JSArray::get_own_property(const JSValue key, JSValue parent) {
   if (key.type() == JSValueType::NUMBER) {
     auto idx = static_cast<size_t>(key.coerce_to_double());
     if (idx >= this->internal->size())
       js_throw(JSValue{"Array access out of bounds"});
     return (*this->internal)[idx];
   }
-  return JSBase::get_property(key, parent);
+  return JSBase::get_own_property(key, parent);
+}
+
+JSArrayBuffer::JSArrayBuffer() : JSBase{}, internal(new std::vector<uint8_t>) {
+  std::vector<uint8_t> *data = &(*this->internal);
+  auto length_prop = JSValue::with_getter_setter(
+      JSValue::new_function(
+          [=](JSValue thisArg, std::vector<JSValue> &args) mutable -> JSValue {
+            return JSValue{static_cast<double>(data->size())};
+          }),
+      JSValue::new_function(
+          [=](JSValue thisArg, std::vector<JSValue> &args) mutable -> JSValue {
+            if (args.size() < 1 || args[0].type() != JSValueType::NUMBER)
+              return JSValue::undefined();
+            JSValue v = args[0];
+            data->resize(static_cast<size_t>(v.coerce_to_double()), 0);
+            return JSValue::undefined();
+          }));
+  this->insert_property(JSValue{"byteLength"}, length_prop);
+  this->insert_property(iterator_symbol,
+                        JSValue::new_function(&JSArray::iterator_impl));
+}
+
+JSArrayBuffer::JSArrayBuffer(std::vector<uint8_t> data) : JSArrayBuffer() {
+  for (auto datum : data) {
+    this->internal->push_back(datum);
+  }
+}
+
+std::optional<JSValue> JSArrayBuffer::get_own_property(JSValue key,
+                                                       JSValue parent) {
+  if (key.type() == JSValueType::NUMBER) {
+    auto idx = static_cast<size_t>(key.coerce_to_double());
+    if (idx >= this->internal->size())
+      js_throw(JSValue{"Array access out of bounds"});
+    return JSValue::with_getter_setter(
+        JSValue::new_function(
+            [=](JSValue thisArg,
+                std::vector<JSValue> &args) mutable -> JSValue {
+              return JSValue(static_cast<uint32_t>((*this->internal)[idx]));
+            }),
+        JSValue::new_function(
+            [=](JSValue thisArg,
+                std::vector<JSValue> &args) mutable -> JSValue {
+              (*this->internal)[idx] = args[0].coerce_to_u32() & 0xff;
+              return JSValue::undefined();
+            }));
+  }
+  return JSBase::get_own_property(key, parent);
 }
 
 JSObject::JSObject()
@@ -238,17 +355,14 @@ JSValue JSFunction::call(JSValue thisArg, std::vector<JSValue> &args) {
 }
 
 JSGeneratorAdapter JSGeneratorAdapter::promise_type::get_return_object() {
-  return {.h = std::experimental::coroutine_handle<promise_type>::from_promise(
-              *this)};
+  return {.h = std::coroutine_handle<promise_type>::from_promise(*this)};
 }
 
-std::experimental::suspend_never
-JSGeneratorAdapter::promise_type::initial_suspend() {
+std::suspend_never JSGeneratorAdapter::promise_type::initial_suspend() {
   return {};
 }
 
-std::experimental::suspend_never
-JSGeneratorAdapter::promise_type::final_suspend() noexcept {
+std::suspend_never JSGeneratorAdapter::promise_type::final_suspend() noexcept {
   return {};
 }
 
@@ -263,7 +377,7 @@ void JSGeneratorAdapter::promise_type::unhandled_exception() {
   }
 }
 
-std::experimental::suspend_always
+std::suspend_always
 JSGeneratorAdapter::promise_type::yield_value(JSValue value) {
   this->value =
       std::optional<shared_ptr<JSValue>>{std::make_shared<JSValue>(value)};

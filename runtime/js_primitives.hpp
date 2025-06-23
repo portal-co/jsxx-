@@ -1,6 +1,6 @@
 #pragma once
 
-#include <experimental/coroutine>
+#include <coroutine>
 #include <functional>
 #include <memory>
 #include <string>
@@ -22,11 +22,13 @@ class JSBase {
 public:
   JSBase();
 
-  virtual JSValue get_property(JSValue key, JSValue parent);
+  virtual std::optional<JSValue> get_own_property(JSValue key, JSValue parent);
+  JSValue get_property(JSValue key, JSValue parent);
+  void insert_property(JSValue key, JSValue value);
   virtual optional<JSValue>
   get_property_from_list(const std::vector<std::pair<JSValue, JSValue>> &list,
                          JSValue key, JSValue parent);
-
+#include "js_primitives_props.hpp"
   std::vector<std::pair<JSValue, JSValue>> properties;
 };
 
@@ -55,7 +57,7 @@ public:
   JSArray();
   JSArray(std::vector<JSValue> data);
 
-  virtual JSValue get_property(JSValue key, JSValue parent);
+  virtual std::optional<JSValue> get_own_property(JSValue key, JSValue parent));
 
   shared_ptr<std::vector<JSValue>> internal;
 
@@ -67,8 +69,16 @@ public:
   static JSValue iterator_impl(JSValue thisArg, std::vector<JSValue> &args);
 };
 
+class JSArrayBuffer : public JSBase {
+public:
+  JSArrayBuffer();
+  JSArrayBuffer(std::vector<uint8_t> data);
+  virtual std::optional<JSValue> get_own_property(JSValue key, JSValue parent);
+  shared_ptr<std::vector<uint8_t>> internal;
+};
+
 class JSObject : public JSBase {
-  
+
 public:
   JSObject();
   JSObject(std::vector<std::pair<JSValue, JSValue>> data);
@@ -92,17 +102,17 @@ public:
 struct JSGeneratorAdapter {
   struct promise_type {
     JSGeneratorAdapter get_return_object();
-    std::experimental::suspend_never initial_suspend();
-    std::experimental::suspend_never final_suspend() noexcept;
+    std::suspend_never initial_suspend();
+    std::suspend_never final_suspend() noexcept;
     void return_void() noexcept;
     void unhandled_exception();
 
-    std::experimental::suspend_always yield_value(JSValue value);
+    std::suspend_always yield_value(JSValue value);
 
     optional<std::shared_ptr<JSValue>> value;
   };
 
-  std::experimental::coroutine_handle<promise_type> h;
+  std::coroutine_handle<promise_type> h;
 };
 
 extern JSValue iterator_symbol;
